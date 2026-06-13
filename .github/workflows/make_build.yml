@@ -62,9 +62,8 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: godot-cpp-template-${{ matrix.target.platform }}-${{ matrix.target.arch }}-${{ matrix.float-precision }}-${{ matrix.target-type }}
-          path: |
-            ${{ github.workspace }}/demo/addons/my_helper_Scripts/**
+          name: ladybug-${{ matrix.target.platform }}-${{ matrix.target.arch }}-${{ matrix.float-precision }}-${{ matrix.target-type }}
+          path: demo/addons/bin/
 
   merge:
     runs-on: ubuntu-22.04
@@ -73,6 +72,6 @@ jobs:
       - name: Merge Artifacts
         uses: actions/upload-artifact/merge@v4
         with:
-          name: godot-cpp-template
-          pattern: godot-cpp-template-*
+          name: ladybug
+          pattern: ladybug-*
           delete-merged: true
