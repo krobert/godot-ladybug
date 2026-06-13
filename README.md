@@ -34,8 +34,8 @@ A C++ GDExtension integrating LadybugDB into Godot, packaged with GDScript helpe
 To use this extension in your own Godot project:
 
 1. Download the compiled release.
-2. Extract and copy the `addons/` folder content into your Godot project's `addons/ladybug` directory.
-3. the gdextension file links `addons/bin` for c++ dependencies to godot, you might want to change the path to your choosen destionation. 
+2. Extract and copy the content and the `addons/` folder content into your Godot project's `addons/ladybug` directory.
+3. the gdextension file links `addons/bin` for c++ dependencies to godot, you might want to change the path to your choosen destionation eg: `addons/ladybug/`
 
 ## Usage
 
