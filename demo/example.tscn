@@ -1,0 +1,12 @@
+[gd_scene format=3 uid="uid://dh0oj81pufivs"]
+
+[ext_resource type="Script" uid="uid://cyq8f56168rmr" path="res://example.gd" id="1_jdh55"]
+[ext_resource type="Script" uid="uid://bt06krwrkpgdj" path="res://example_schema.gd" id="2_n51mc"]
+
+[sub_resource type="Resource" id="Resource_2jas5"]
+script = ExtResource("2_n51mc")
+metadata/_custom_type_script = "uid://bt06krwrkpgdj"
+
+[node name="Node" type="Node" unique_id=499891144]
+script = ExtResource("1_jdh55")
+schema = SubResource("Resource_2jas5")

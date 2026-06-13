@@ -1,0 +1,19 @@
+# Godot artifacts
+.godot/
+*.uid
+
+# SCons & C++ Build files
+.sconsign.dblite
+*.o
+*.os
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+*.exp
+*.pdb
+
+# Ignore compiled libraries, keep the configuration manifest
+demo/bin/*
+!demo/bin/*.gdextension
