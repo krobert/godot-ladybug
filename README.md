@@ -27,15 +27,19 @@ A C++ GDExtension integrating LadybugDB into Godot, packaged with GDScript helpe
     scons platform=windows
     # Or platform=linux, platform=macos || platform=macos arch=arm64
     ```
-    *Compiled libraries will be automatically placed inside `demo/addons/bin`.*
+    
+    You dont need mcp? add this param
+    `build_mcp=no`
+    you only want mcp?
+    `build_ladybug=no`
+    *Compiled libraries will be automatically placed inside `demo/addons/ladybug/bin` and mcp/bin.*
 
 ## Installation
 
 To use this extension in your own Godot project:
 
 1. Download the compiled release.
-2. Extract and copy the content and the `addons/` folder content into your Godot project's `addons/ladybug` directory.
-3. the gdextension file links `addons/bin` for c++ dependencies to godot, you might want to change the path to your choosen destionation eg: `addons/ladybug/`
+2. Extract and copy the release compiled folder and the `addons` folder content into your Godot project's `addons/` directory.
 
 ## Usage
 

@@ -1,99 +1,127 @@
 #!/usr/bin/env python
 import os
 import sys
-
 from methods import print_error
 
-libname = "ladybug"
-projectdir = os.path.join(Dir('.').abspath, "demo/addons")
+projectdir = os.path.join(Dir(".").abspath, "demo/addons")
 
 localEnv = Environment(tools=["default"], PLATFORM="")
+customs = [os.path.abspath(path) for path in ["custom.py"]]
 
-# Build profiles can be used to decrease compile times.
-# localEnv["build_profile"] = "build_profile.json"
-
-customs = ["custom.py"]
-customs = [os.path.abspath(path) for path in customs]
-
+# Define custom build variables
 opts = Variables(customs, ARGUMENTS)
+opts.Add(BoolVariable("build_ladybug", "Build the Ladybug Database module", True))
+opts.Add(BoolVariable("build_mcp", "Build the MCP Server module", True))
 opts.Update(localEnv)
 
 Help(opts.GenerateHelpText(localEnv))
-
 env = localEnv.Clone()
 
 if not (os.path.isdir("godot-cpp") and os.listdir("godot-cpp")):
     print_error(
-        """godot-cpp is not available within this folder, as Git submodules haven't been initialized.
-Run the following command to download godot-cpp:
-
-    git submodule update --init --recursive"""
+        "godot-cpp not initialized. Run: git submodule update --init --recursive"
     )
     sys.exit(1)
 
 env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
-
-# --- Ladybug integration ---
-ladybug_base = "thirdparty"
-if env["platform"] == "linux":
-    ladybug_dir = os.path.join(ladybug_base, "liblbug-linux-x86_64")
-    env.Append(LIBS=["lbug", "pthread", "dl"])
-elif env["platform"] == "macos":
-    ladybug_dir = os.path.join(ladybug_base, "liblbug-osx-arm64")
-    env.Append(LIBS=["lbug"])
-    env.Append(LINKFLAGS=["-Wl,-rpath,@loader_path"])
-elif env["platform"] == "windows":
-    ladybug_dir = os.path.join(ladybug_base, "liblbug-windows-x86_64") # Ensure this folder exists in your thirdparty dir
-    env.Append(LIBS=["lbug"])
-else:
-    print_error("Ladybug not configured for platform: " + env["platform"])
-    sys.exit(1)
-
-env.Append(CPPPATH=[ladybug_dir])
-env.Append(LIBPATH=[ladybug_dir])
-# --- end Ladybug ---
-
-env.Append(CPPPATH=["src/"])
-sources = Glob("src/*.cpp")
-
-if env["target"] in ["editor", "template_debug"]:
-    try:
-        doc_data = env.GodotCPPDocData(
-            "src/gen/doc_data.gen.cpp", source=Glob("doc_classes/*.xml")
-        )
-        sources.append(doc_data)
-    except AttributeError:
-        print("Not including class reference as we're targeting a pre-4.3 baseline.")
-
 suffix = env["suffix"].replace(".dev", "").replace(".universal", "")
+default_args = []
 
-lib_filename = "{}{}{}{}".format(
-    env.subst("$SHLIBPREFIX"), libname, suffix, env.subst("$SHLIBSUFFIX")
-)
+# --- LADYBUG MODULE ---
+if env["build_ladybug"]:
+    lb_env = env.Clone()
+    ladybug_base = "thirdparty/ladybug"
+    if lb_env["platform"] == "linux":
+        lb_dir = os.path.join(ladybug_base, "liblbug-linux-x86_64")
+        lb_env.Append(LIBS=["lbug", "pthread", "dl"])
+    elif lb_env["platform"] == "macos":
+        lb_dir = os.path.join(ladybug_base, "liblbug-osx-arm64")
+        lb_env.Append(LIBS=["lbug"], LINKFLAGS=["-Wl,-rpath,@loader_path"])
+    elif lb_env["platform"] == "windows":
+        lb_dir = os.path.join(ladybug_base, "liblbug-windows-x86_64")
+        lb_env.Append(LIBS=["lbug"])
+    else:
+        print_error("Ladybug not configured for platform: " + lb_env["platform"])
+        sys.exit(1)
 
-target_dir = os.path.join(Dir('.').abspath, "demo", "addons", "bin", env["platform"])
+    lb_env.Append(CPPPATH=[lb_dir, "src/ladybug/"])
+    lb_env.Append(LIBPATH=[lb_dir])
 
-library = env.SharedLibrary(
-    target=os.path.join(target_dir, lib_filename),
-    source=sources,
-)
+    lb_src = Glob("src/ladybug/*.cpp")
+    if lb_env["target"] in ["editor", "template_debug"]:
+        try:
+            lb_src.append(
+                lb_env.GodotCPPDocData(
+                    "src/ladybug/gen/doc_data.gen.cpp",
+                    source=Glob("doc_classes/ladybug/*.xml"),
+                )
+            )
+        except AttributeError:
+            pass
 
-if env["platform"] == "macos":
-    src_dylib = os.path.join(ladybug_dir, "liblbug.0.17.1.dylib")
-    lib0 = env.InstallAs(os.path.join(target_dir, "liblbug.0.dylib"), src_dylib)
-    lib1 = env.InstallAs(os.path.join(target_dir, "liblbug.dylib"), src_dylib)
-    env.AddPostAction([library, lib0, lib1], 'xattr -c "$TARGET"')
-    default_args = [library, lib0, lib1]
+    lb_target_dir = os.path.join(projectdir, "ladybug", "bin", lb_env["platform"])
+    lb_libname = "{}{}{}{}".format(
+        lb_env.subst("$SHLIBPREFIX"), "ladybug", suffix, lb_env.subst("$SHLIBSUFFIX")
+    )
 
-elif env["platform"] == "windows":
-    lib_copy = env.Install(target_dir, os.path.join(ladybug_dir, "lbug.dll"))
-    default_args = [library, lib_copy]
+    lb_lib = lb_env.SharedLibrary(
+        target=os.path.join(lb_target_dir, lb_libname), source=lb_src
+    )
+    default_args.append(lb_lib)
 
-elif env["platform"] == "linux":
-    lib_copy = env.Install(target_dir, os.path.join(ladybug_dir, "liblbug.so"))
-    default_args = [library, lib_copy]
+    if lb_env["platform"] == "macos":
+        src_dylib = os.path.join(lb_dir, "liblbug.0.17.1.dylib")
+        lib0 = lb_env.InstallAs(
+            os.path.join(lb_target_dir, "liblbug.0.dylib"), src_dylib
+        )
+        lib1 = lb_env.InstallAs(os.path.join(lb_target_dir, "liblbug.dylib"), src_dylib)
+        lb_env.AddPostAction([lb_lib, lib0, lib1], 'xattr -c "$TARGET"')
+        default_args.extend([lib0, lib1])
+    elif lb_env["platform"] == "windows":
+        default_args.append(
+            lb_env.Install(lb_target_dir, os.path.join(lb_dir, "lbug.dll"))
+        )
+    elif lb_env["platform"] == "linux":
+        default_args.append(
+            lb_env.Install(lb_target_dir, os.path.join(lb_dir, "liblbug.so"))
+        )
 
-else:
-    default_args = [library]
+# --- MCP MODULE ---
+if env["build_mcp"]:
+    mcp_env = env.Clone()
+    mcp_env.Append(CPPPATH=["thirdparty/glaze/include", "src/glaze/"])
+    if (
+        mcp_env.get("is_msvc", False)
+        or mcp_env.get("cc", "") == "msvc"
+        or mcp_env.get("CC", "") == "cl"
+    ):
+        mcp_env.Append(CXXFLAGS=["/std:c++latest"])
+    else:
+        mcp_env.Append(CXXFLAGS=["-std=c++2b"])
+
+    mcp_src = Glob("src/glaze/*.cpp")
+    if mcp_env["target"] in ["editor", "template_debug"]:
+        try:
+            mcp_src.append(
+                mcp_env.GodotCPPDocData(
+                    "src/glaze/gen/doc_data.gen.cpp",
+                    source=Glob("doc_classes/glaze/*.xml"),
+                )
+            )
+        except AttributeError:
+            pass
+
+    mcp_target_dir = os.path.join(projectdir, "mcp", "bin", mcp_env["platform"])
+    mcp_libname = "{}{}{}{}".format(
+        mcp_env.subst("$SHLIBPREFIX"), "mcp", suffix, mcp_env.subst("$SHLIBSUFFIX")
+    )
+
+    mcp_lib = mcp_env.SharedLibrary(
+        target=os.path.join(mcp_target_dir, mcp_libname), source=mcp_src
+    )
+    default_args.append(mcp_lib)
+
+    if mcp_env["platform"] == "macos":
+        mcp_env.AddPostAction(mcp_lib, 'xattr -c "$TARGET"')
 
 Default(*default_args)
