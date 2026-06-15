@@ -22,3 +22,5 @@ config/icon="res://icon.svg"
 [autoload]
 
 LadybugBridge="*uid://d0qrwy3o44oky"
+Mcp="*uid://b4va58uqlb7pq"
+Log="*uid://vakeftivdtwf"

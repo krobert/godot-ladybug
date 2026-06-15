@@ -1,15 +1,8 @@
 extends Node
 
 signal database_ready
-signal database_error(message: String)
 
-enum LogLevel {
-	NONE   = 0,
-	ERROR  = 1,
-	WARN   = 2,
-	INFO   = 4,
-	ALL    = 7   # ERROR | WARN | INFO
-}
+@export var logger: DebugLogger
 
 var _db: Ladybug
 var _schema: LadybugSchema
@@ -20,7 +13,6 @@ var _initializing: bool = false
 var _is_writing: bool = false
 var _prepared_read: Dictionary = {}  # name -> cypher
 
-var _log_level: int = LogLevel.ERROR | LogLevel.WARN
 
 func _ready():
 	_db = Ladybug.new()
@@ -28,23 +20,23 @@ func _ready():
 func init_db(schema: LadybugSchema, user_path: String) -> void:
 	_schema = schema
 	if _is_ready:
-		_log(LogLevel.WARN, "Database already initialised")
+		logger.d("Database already initialised")
 		return
 	
 	_initializing = true
 	
 	var err = open_db(user_path)
 	if err != OK:
-		_log(LogLevel.ERROR, "DEBUG: Database failed to open...")
+		logger.e("Database failed to open...")
 		return
-	_log(LogLevel.INFO, "DEBUG: Database opened, checking version...")
+	logger.d("Database opened, checking version...")
 
 	# Read current schema version from a Meta node table
 	var current_version: int = _get_stored_version()
-	_log(LogLevel.INFO, "Stored schema version: %d, resource version: %d" % [current_version, schema.version])
+	logger.d("Stored schema version: %d, resource version: %d" % [current_version, schema.version])
 
 	if current_version < schema.version:
-		_log(LogLevel.INFO, "Running %d setup queries..." % schema.setup_queries.size())
+		logger.d("Running %d setup queries..." % schema.setup_queries.size())
 		# Enqueue all setup queries as writes
 		for query in schema.setup_queries:
 			var trimmed = query.strip_edges()
@@ -58,9 +50,9 @@ func init_db(schema: LadybugSchema, user_path: String) -> void:
 		# Store the new version
 		_set_stored_version(schema.version)
 	else:
-		_log(LogLevel.INFO, "Schema up to date, no migration needed")
+		logger.d( "Schema up to date, no migration needed")
 
-	_log(LogLevel.INFO, "Database ready for queries")
+	logger.d("Database ready for queries")
 	_is_ready = true
 	database_ready.emit()
 
@@ -77,34 +69,34 @@ func open_db(user_path: String) -> Error:
 	if not DirAccess.dir_exists_absolute(dir):
 		var err = DirAccess.make_dir_recursive_absolute(dir)
 		if err != OK:
-			_log(LogLevel.ERROR, "Failed to create database directory: " + dir)
+			logger.e("Failed to create database directory: " + dir)
 			return FAILED
 
 	var err = _db.open(absolute_path)
 	if err != OK:
-		_log(LogLevel.ERROR, "Failed to open database: " + absolute_path)
+		logger.e("Failed to open database: " + absolute_path)
 	else:
-		_log(LogLevel.INFO, "Database opened: " + absolute_path)
+		logger.d("Database opened: " + absolute_path)
 	return err
 
 func close_db():
 	_is_ready = false
 	_db.close()
-	_log(LogLevel.INFO, "Database closed")
+	logger.d( "Database closed")
 
 # ------------------------------------------------------------------
 #  Read-only query (no write keywords allowed)
 # ------------------------------------------------------------------
 func read_query(cypher: String, params: Dictionary = {}) -> Array:
 	if not _is_ready:
-		_log(LogLevel.ERROR, "read_query called before database is ready")
+		logger.e("read_query called before database is ready")
 		return []
 	
 	# Block write keywords
 	var upper = cypher.to_upper()
 	for keyword in ["CREATE ", "DELETE ", "SET ", "MERGE ", "DROP ", "COPY ", "ALTER "]:
 		if keyword in upper:
-			_log(LogLevel.ERROR, "read_query used for a write operation. Use write_query.")
+			logger.e("read_query used for a write operation. Use write_query.")
 			return []
 
 	if params.is_empty():
@@ -115,7 +107,7 @@ func read_query(cypher: String, params: Dictionary = {}) -> Array:
 	if not key in _prepared_read:
 		var err = _db.prepare(key, cypher)
 		if err != OK:
-			_log(LogLevel.ERROR, "Failed to prepare read: " + cypher)
+			logger.e("Failed to prepare read: " + cypher)
 			return []
 		_prepared_read[key] = cypher
 	return _db.execute_prepared(key, params)
@@ -125,7 +117,7 @@ func read_query(cypher: String, params: Dictionary = {}) -> Array:
 # ------------------------------------------------------------------
 func write_query(cypher: String, params: Dictionary = {}, callback: Callable = Callable()) -> void:
 	if not _is_ready and not _initializing:
-		_log(LogLevel.ERROR, "write_query called before database is ready")
+		logger.e("write_query called before database is ready")
 		return
 
 	# ensure it contains a write keyword (soft guard)
@@ -136,14 +128,10 @@ func write_query(cypher: String, params: Dictionary = {}, callback: Callable = C
 			is_write = true
 			break
 	if not is_write:
-		_log(LogLevel.WARN, "write_query used with no write keyword: " + cypher)
+		logger.d("write_query used with no write keyword: " + cypher)
 
 	_write_queue.append({"cypher": cypher, "params": params, "callback": callback})
 	_process_queue()
-
-# Logs
-func set_log_level(level: int) -> void:
-	_log_level = level
 
 # Helpers for version storage
 func _get_stored_version() -> int:
@@ -178,7 +166,7 @@ func _process_queue() -> void:
 
 		if not _db.is_open():
 			error_msg = "Database not open during write"
-			_log(LogLevel.ERROR, error_msg)
+			logger.e(error_msg)
 		else:
 			if params.is_empty():
 				result = _db.query(cypher)
@@ -186,7 +174,7 @@ func _process_queue() -> void:
 				var stmt_name = "write_" + cypher.md5_text()
 				if _db.prepare(stmt_name, cypher) != OK:
 					error_msg = "Failed to prepare write: " + cypher
-					_log(LogLevel.ERROR, error_msg)
+					logger.e(error_msg)
 				else:
 					result = _db.execute_prepared(stmt_name, params)
 			
@@ -208,23 +196,3 @@ func _process_queue() -> void:
 			await get_tree().process_frame
 
 	_is_writing = false
-
-# ------------------------------------------------------------------
-#  Error logging (copypaste ready)
-# ------------------------------------------------------------------
-
-func _log(level: LogLevel, msg: String) -> void:
-	if not _should_log(level):
-		return
-	var prefix = "[LadybugBridge]"
-	match level:
-		LogLevel.ERROR:
-			printerr(prefix, " ERROR: ", msg)
-			database_error.emit(msg)
-		LogLevel.WARN:
-			push_warning(prefix, " WARN: ", msg)
-		LogLevel.INFO:
-			print(prefix, " INFO: ", msg)
-			
-func _should_log(level: LogLevel) -> bool:
-	return (_log_level & level) != 0
