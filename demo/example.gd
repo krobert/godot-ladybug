@@ -16,15 +16,26 @@ func _ready() -> void:
 func _on_db_ready() -> void:
 	Mcp.start()
 	print("db_ready")
+	# test db
+	var result = LadybugBridge.read_query("MATCH (p:Person) RETURN p.name, p.age")
+	for row in result:
+		print("Name: ", row["p.name"], " Age: ", row["p.age"])
+
+	LadybugBridge.write_query("CREATE (:Person {name: $n})", {"n": "Charlie"}, func(res, err):
+		if err != "":
+			print("Write failed: ", err)
+		else:
+			print("Write succeeded")
+	)
 
 func _exit_tree() -> void:
 	Mcp.stop()
 	LadybugBridge.close_db()
 
 func _register_tools() -> void:
-	Mcp.register_tool("list_people", "List all people in DB", {"type": "object", "properties": {}}, _list_people)
-	
-	Mcp.register_tool("add_person", "Add a new person", 
+	Mcp.register_tool("list_people", "List all people in DB", {"type": "object"}, _list_people)
+	Mcp.register_tool("add_person", 
+		"Add a new person", 
 		{"type": "object", "properties": {"name": {"type": "string"}, "age": {"type": "integer"}}, "required": ["name", "age"]}, 
 		_add_person)
 		

@@ -8,6 +8,7 @@ const MAX_BODY_BYTES: int = 8 * 1024 * 1024
 const REQUEST_TIMEOUT_MSEC: int = 10000
 
 @export var logger: DebugLogger
+@export var port: int = 3000
 
 var _server: TCPServer = TCPServer.new()
 var _pending_clients: Array[Dictionary] = []
@@ -16,19 +17,18 @@ var _glaze: Glaze
 
 var _tools: Dictionary = {}
 var _resources: Dictionary = {}
+var _prompts: Dictionary = {}
 var _active_session_count: int = 0
-
-var port: int
+var _last_keepalive_msec: int = 0
 
 func _ready() -> void:
 	_glaze = Glaze.new()
 
-func start(p_port: int = 3000) -> Error:
+func start() -> Error:
 	if _server.is_listening():
 		stop()
-	port = p_port
 	var err: Error = _server.listen(port)
-	if err == OK:
+	if err == OK and logger:
 		logger.d("Godot MCP Server running on port ", port, " (HTTP SSE)")
 	return err
 
@@ -93,8 +93,7 @@ func _process(_delta: float) -> void:
 					_pending_clients.remove_at(i)
 				continue
 				
-			var headers_str: String = req_str.substr(0, header_end)
-			_parse_headers(conn, headers_str)
+			_parse_headers(conn, req_str.substr(0, header_end))
 			
 			if conn["content_length"] > MAX_BODY_BYTES:
 				_send_http_response(peer, 413, "Payload Too Large", "text/plain", "")
@@ -105,9 +104,7 @@ func _process(_delta: float) -> void:
 			var expected_total_size: int = conn["buffer"].get_string_from_utf8().find("\r\n\r\n") + 4 + conn["content_length"]
 			if conn["buffer"].size() >= expected_total_size:
 				var full_req: String = conn["buffer"].get_string_from_utf8()
-				var body_start: int = full_req.find("\r\n\r\n") + 4
-				var body_text: String = full_req.substr(body_start)
-				
+				var body_text: String = full_req.substr(full_req.find("\r\n\r\n") + 4)
 				_route_request(peer, conn["method"], conn["path"], body_text)
 				_pending_clients.remove_at(i)
 
@@ -120,14 +117,20 @@ func _process(_delta: float) -> void:
 			
 	for session_id: String in dead_sessions:
 		_sse_streams.erase(session_id)
-		
+	
+	var current_time: int = Time.get_ticks_msec()
+	if current_time - _last_keepalive_msec > 15000:
+		_last_keepalive_msec = current_time
+		var keepalive_bytes: PackedByteArray = ": keepalive\r\n\r\n".to_utf8_buffer()
+		for session_id: String in _sse_streams:
+			_sse_streams[session_id].put_data(keepalive_bytes)
 	_update_session_count()
 
-func register_tool(tool_name: String, description: String, schema: Dictionary, callback: Callable) -> void:
-	_tools[tool_name] = {"name": tool_name, "description": description, "inputSchema": schema, "callback": callback}
+func register_tool(t_name: String, desc: String, schema: Dictionary, callback: Callable) -> void:
+	_tools[t_name] = {"name": t_name, "description": desc, "inputSchema": schema, "callback": callback}
 
-func register_resource(uri: String, resource_name: String, description: String, mime: String, callback: Callable) -> void:
-	_resources[uri] = {"uri": uri, "name": resource_name, "description": description, "mimeType": mime, "callback": callback}
+func register_resource(uri: String, r_name: String, desc: String, mime: String, callback: Callable) -> void:
+	_resources[uri] = {"uri": uri, "name": r_name, "description": desc, "mimeType": mime, "callback": callback}
 
 func _parse_headers(conn: Dictionary, headers_str: String) -> void:
 	var lines: PackedStringArray = headers_str.split("\r\n")
@@ -146,8 +149,9 @@ func _parse_headers(conn: Dictionary, headers_str: String) -> void:
 	conn["headers_parsed"] = true
 
 func _route_request(client: StreamPeerTCP, method: String, path: String, body: String) -> void:
-	logger.d("HTTP Request: ", method, " ", path)
-	
+	if logger:
+		logger.d("HTTP Request: ", method, " ", path)
+		
 	if method == "OPTIONS" and path.begins_with("/mcp"):
 		_send_http_response(client, 200, "OK", "", "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\n")
 		return
@@ -155,33 +159,36 @@ func _route_request(client: StreamPeerTCP, method: String, path: String, body: S
 	if method == "GET" and path.begins_with("/mcp/sse"):
 		var session_id: String = str(Time.get_ticks_usec())
 		_sse_streams[session_id] = client
-		
 		var sse_headers: String = "Access-Control-Allow-Origin: *\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n"
 		_send_http_response(client, 200, "OK", "text/event-stream", sse_headers, false)
-		
-		var endpoint_event: String = "event: endpoint\r\ndata: http://127.0.0.1:%d/mcp/message?sessionId=%s\r\n\r\n" % [port, session_id]
-		client.put_data(endpoint_event.to_utf8_buffer())
+		client.put_data(("event: endpoint\r\ndata: http://127.0.0.1:%d/mcp/message?sessionId=%s\r\n\r\n" % [port, session_id]).to_utf8_buffer())
 		_update_session_count()
-		logger.d("SSE stream opened: ", session_id)
+		
+		if logger:
+			logger.d("SSE stream opened: ", session_id)
 		return
 
 	if method == "POST" and path.begins_with("/mcp/message"):
 		var session_id: String = _extract_query_param(path, "sessionId")
-		_send_http_response(client, 202, "Accepted", "text/plain", "Access-Control-Allow-Origin: *\r\n", false)
 		
 		if session_id != "" and _sse_streams.has(session_id):
 			_process_mcp_rpc(_sse_streams[session_id], body)
-		else:
-			logger.d("POST received for unknown SSE session: ", session_id)
+		elif logger:
+			logger.e("POST received for unknown SSE session: ", session_id)
+			
+		_send_http_response(client, 202, "Accepted", "text/plain", "Access-Control-Allow-Origin: *\r\n", true)
 		return
 		
 	_send_http_response(client, 404, "Not Found", "text/plain", "")
 
 func _process_mcp_rpc(sse_client: StreamPeerTCP, json_str: String) -> void:
-	logger.d("Incoming RPC: ", json_str)
+	if logger:
+		logger.d("Incoming RPC: ", json_str)
+		
 	var req: Variant = _glaze.from_string(json_str)
 	if typeof(req) != TYPE_DICTIONARY or not req.has("method"):
-		logger.e("Parse error on incoming RPC")
+		if logger:
+			logger.e("Parse error on incoming RPC")
 		_send_error(sse_client, null, -32700, "Parse error")
 		return
 
@@ -190,60 +197,93 @@ func _process_mcp_rpc(sse_client: StreamPeerTCP, json_str: String) -> void:
 	
 	match req["method"]:
 		"initialize":
+			var client_version: String = params.get("protocolVersion", "2024-11-05")
+			var negotiated: String = client_version if client_version in ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"] else "2024-11-05"
 			_send_response(sse_client, msg_id, {
-				"protocolVersion": "2024-11-05",
-				"capabilities": {"tools": {}, "resources": {}},
+				"protocolVersion": negotiated,
+				"capabilities": {"tools": {}, "resources": {}, "prompts": {}},
 				"serverInfo": {"name": "GodotMCP", "version": "1.0.0"}
 			})
-		"notifications/initialized":
+			
+		"notifications/initialized", "notifications/cancelled":
 			pass
+			
 		"ping":
 			_send_response(sse_client, msg_id, {})
+			
 		"tools/list":
-			var tool_list: Array = []
+			var t_list: Array = []
 			for key: String in _tools:
-				var t: Dictionary = _tools[key]
-				tool_list.append({"name": t.name, "description": t.description, "inputSchema": t.inputSchema})
-			_send_response(sse_client, msg_id, {"tools": tool_list})
+				t_list.append({"name": _tools[key].name, "description": _tools[key].description, "inputSchema": _tools[key].inputSchema})
+			_send_response(sse_client, msg_id, {"tools": t_list})
+			
 		"tools/call":
-			var tool_name: String = params.get("name", "")
-			if not _tools.has(tool_name):
-				logger.e("Tool not found: ", tool_name)
-				_send_error(sse_client, msg_id, -32601, "Tool not found")
+			var t_name: String = params.get("name", "")
+			if not _tools.has(t_name):
+				if logger:
+					logger.e("Tool not found: ", t_name)
+				_send_error(sse_client, msg_id, -32601, "Tool not found: " + t_name)
 				return
-			
-			logger.d("Executing tool: ", tool_name)
-			var raw_args: Dictionary = params.get("arguments", {})
-			
-			var exec_result: Variant = await _tools[tool_name].callback.call(raw_args)
-			var text_output: String
-			
-			if typeof(exec_result) == TYPE_STRING:
-				text_output = exec_result
-			else:
-				text_output = _glaze.to_string(exec_result)
 				
-			_send_response(sse_client, msg_id, {"content": [{"type": "text", "text": text_output}]})
-		_:
-			logger.d("Method not found: ", req["method"])
-			_send_error(sse_client, msg_id, -32601, "Method not found")
+			if logger:
+				logger.d("Executing tool: ", t_name)
+				
+			var exec_result: Variant = await _tools[t_name].callback.call(params.get("arguments", {}))
+			var is_err: bool = typeof(exec_result) == TYPE_DICTIONARY and exec_result.has("error")
 			
+			var response_data: Dictionary = {
+				"content": [{"type": "text", "text": exec_result if typeof(exec_result) == TYPE_STRING else _glaze.to_string(exec_result)}],
+				"isError": is_err
+			}
+			
+			if not is_err and typeof(exec_result) == TYPE_DICTIONARY:
+				response_data["structuredContent"] = exec_result
+				
+			_send_response(sse_client, msg_id, response_data)
+			
+		"resources/list":
+			var r_list: Array = []
+			for key: String in _resources:
+				r_list.append({"uri": _resources[key].uri, "name": _resources[key].name, "description": _resources[key].description, "mimeType": _resources[key].mimeType})
+			_send_response(sse_client, msg_id, {"resources": r_list})
+			
+		"resources/read":
+			var uri: String = params.get("uri", "")
+			if _resources.has(uri):
+				var content: Variant = await _resources[uri].callback.call(uri)
+				_send_response(sse_client, msg_id, {"contents": [{"uri": uri, "mimeType": _resources[uri].mimeType, "text": content if typeof(content) == TYPE_STRING else _glaze.to_string(content)}]})
+			else:
+				if logger:
+					logger.e("Invalid resource URI: ", uri)
+				_send_error(sse_client, msg_id, -32602, "Invalid resource URI")
+				
+		_:
+			if logger:
+				logger.d("Method not found: ", req["method"])
+			_send_error(sse_client, msg_id, -32601, "Method not found: " + str(req["method"]))
+			
+
 func _send_response(client: StreamPeerTCP, id: Variant, result: Dictionary) -> void:
 	if id == null: return
-	var payload: String = _glaze.to_string({"jsonrpc": "2.0", "id": id, "result": result}).replace("\n", "")
-	var sse_event: String = "event: message\r\ndata: %s\r\n\r\n" % payload
-	client.put_data(sse_event.to_utf8_buffer())
+	var payload: String = _glaze.to_string({"jsonrpc": "2.0", "id": id, "result": result}).replace("\n", "").replace("\r", "")
+	
+	if logger:
+		logger.d("Sending SSE: ", payload)
+		
+	client.put_data(("event: message\r\ndata: %s\r\n\r\n" % payload).to_utf8_buffer())
 
 func _send_error(client: StreamPeerTCP, id: Variant, code: int, message: String) -> void:
 	if id == null: return
-	var payload: String = _glaze.to_string({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}).replace("\n", "")
-	var sse_event: String = "event: message\r\ndata: %s\r\n\r\n" % payload
-	client.put_data(sse_event.to_utf8_buffer())
+	var payload: String = _glaze.to_string({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}).replace("\n", "").replace("\r", "")
+	
+	if logger:
+		logger.e("Sending Error SSE: ", payload)
+		
+	client.put_data(("event: message\r\ndata: %s\r\n\r\n" % payload).to_utf8_buffer())
 
 func _send_http_response(client: StreamPeerTCP, code: int, status: String, content_type: String, extra_headers: String, close_conn: bool = true) -> void:
 	var response: String = "HTTP/1.1 %d %s\r\n" % [code, status]
-	if content_type != "":
-		response += "Content-Type: %s\r\n" % content_type
+	if content_type != "": response += "Content-Type: %s\r\n" % content_type
 	response += extra_headers
 	
 	if close_conn:
@@ -256,15 +296,14 @@ func _send_http_response(client: StreamPeerTCP, code: int, status: String, conte
 	else:
 		response += "\r\n"
 		client.put_data(response.to_utf8_buffer())
-		
+
 func _extract_query_param(path: String, param: String) -> String:
 	var q_idx: int = path.find("?")
 	if q_idx == -1: return ""
 	var pairs: PackedStringArray = path.substr(q_idx + 1).split("&")
 	for pair: String in pairs:
 		var kv: PackedStringArray = pair.split("=")
-		if kv.size() == 2 and kv[0] == param:
-			return kv[1]
+		if kv.size() == 2 and kv[0] == param: return kv[1]
 	return ""
 
 func _update_session_count() -> void:
