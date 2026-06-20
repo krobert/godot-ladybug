@@ -1,6 +1,11 @@
-# Godot LadybugDB Extension
+# Godot LadybugDB + MCP Server Extensions
 
 A C++ GDExtension integrating LadybugDB into Godot, packaged with GDScript helper utilities as a single addon.
+You can read / write your game database from AI agents. (Tested with hermes, odysseus)
+
+I also added `Glaze` for json parsing and schema validation. 
+
+For best performance make your graph models in cpp struct and compile your own version.
 
 ## Repository Structure
 
@@ -40,38 +45,8 @@ To use this extension in your own Godot project:
 
 1. Download the compiled release.
 2. Extract and copy the release compiled folder and the `addons` folder content into your Godot project's `addons/` directory.
+3. Check the demo project to see how to use it
 
-## Usage
-
-Once installed, the C++ nodes are available in your project, and you can utilize the helper scripts immediately.
-
-```gdscript
-extends Node
-
-@export var schema: LadybugSchema = ExampleSchema.new()
-
-func _ready():
-  LadybugBridge.set_log_level(LadybugBridge.LogLevel.ALL)
-  LadybugBridge.database_ready.connect(_on_db_ready)
-  await LadybugBridge.init_db(schema, "people.lbdb")
-  
-func _on_db_ready():
-  print("db_ready")
-  var result = LadybugBridge.read_query("MATCH (p:Person) RETURN p.name, p.age")
-  for row in result:
-    print("Name: ", row["p.name"], " Age: ", row["p.age"])
-
-  LadybugBridge.write_query("CREATE (:Person {name: $n})", {"n": "Charlie"}, func(res, err):
-    if err != "":
-      print("Write failed: ", err)
-    else:
-      print("Write succeeded")
-  )
-  
-func _exit_tree() -> void:
-  LadybugBridge.close_db()
-
-```
 
 ## Support this project
 

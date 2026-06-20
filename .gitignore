@@ -17,3 +17,6 @@
 # Ignore compiled libraries, keep the configuration manifest
 demo/bin/*
 !demo/bin/*.gdextension
+/src/glaze/gen
+/src/ladybug/gen
+/src/ladybug/gen

@@ -4,123 +4,112 @@ signal database_ready
 
 @export var logger: DebugLogger
 
+# DB Core
 var _db: Ladybug
 var _schema: LadybugSchema
-
-var _write_queue: Array = []      # {cypher, params, callback: Callable}
+var _write_queue: Array = []
 var _is_ready: bool = false
 var _initializing: bool = false
 var _is_writing: bool = false
-var _prepared_read: Dictionary = {}  # name -> cypher
+var _prepared_read: Dictionary = {}
 
+# Sync Bridge
+var _flattener: Flattener
+var _delimiter: String = "_"
 
-func _ready():
+func _ready() -> void:
 	_db = Ladybug.new()
+	if ClassDB.class_exists("GlazeFlattener"):
+		_flattener = Flattener.new()
+	else:
+		if logger: logger.e("GlazeFlattener GDExtension not found.")
 
-func init_db(schema: LadybugSchema, user_path: String) -> void:
-	_schema = schema
+# ------------------------------------------------------------------
+#  Database Init & Queue Management
+# ------------------------------------------------------------------
+func init_db(schemas: Array[LadybugSchema], user_path: String) -> void:
 	if _is_ready:
-		logger.d("Database already initialised")
+		if logger: logger.d("Database already initialised")
 		return
 	
 	_initializing = true
-	
 	var err = open_db(user_path)
 	if err != OK:
-		logger.e("Database failed to open...")
+		if logger: logger.e("Database failed to open...")
 		return
-	logger.d("Database opened, checking version...")
+		
+	_init_meta_table()
 
-	# Read current schema version from a Meta node table
-	var current_version: int = _get_stored_version()
-	logger.d("Stored schema version: %d, resource version: %d" % [current_version, schema.version])
+	for schema in schemas:
+		var schema_key: String = schema.resource_name 
+		var current_version: int = _get_stored_version(schema_key)
+		
+		if current_version < schema.version:
+			if logger: logger.d("Migrating '%s' to version %d" % [schema_key, schema.version])
+			for query in schema.setup_queries:
+				var trimmed = query.strip_edges()
+				if not trimmed.is_empty():
+					_db.query(trimmed) # Direct execution: No async await, zero queue GC overhead
+			
+			_set_stored_version(schema_key, schema.version)
 
-	if current_version < schema.version:
-		logger.d("Running %d setup queries..." % schema.setup_queries.size())
-		# Enqueue all setup queries as writes
-		for query in schema.setup_queries:
-			var trimmed = query.strip_edges()
-			if trimmed.is_empty():
-				continue
-			write_query(trimmed, {})   # no callback needed
-
-		# Wait until the write queue is completely drained
-		await _wait_for_queue_empty()
-
-		# Store the new version
-		_set_stored_version(schema.version)
-	else:
-		logger.d( "Schema up to date, no migration needed")
-
-	logger.d("Database ready for queries")
 	_is_ready = true
-	database_ready.emit()
+	_initializing = false
+	if logger: logger.d("Database ready")
+	
 
 func is_ready() -> bool:
 	return _is_ready
 
-# ------------------------------------------------------------------
-#  Open / Close
-# ------------------------------------------------------------------
 func open_db(user_path: String) -> Error:
-	#var real_path = OS.get_executable_path().get_base_dir().path_join(user_path)
-	var absolute_path = ProjectSettings.globalize_path("res://db/" + user_path)
+	var absolute_path = ProjectSettings.globalize_path("res://" + user_path)
 	var dir = absolute_path.get_base_dir()
 	if not DirAccess.dir_exists_absolute(dir):
 		var err = DirAccess.make_dir_recursive_absolute(dir)
 		if err != OK:
-			logger.e("Failed to create database directory: " + dir)
+			if logger: logger.e("Failed to create database directory: " + dir)
 			return FAILED
 
 	var err = _db.open(absolute_path)
 	if err != OK:
-		logger.e("Failed to open database: " + absolute_path)
+		if logger: logger.e("Failed to open database: " + absolute_path)
 	else:
-		logger.d("Database opened: " + absolute_path)
+		if logger: logger.d("Database opened: " + absolute_path)
 	return err
 
-func close_db():
+func close_db() -> void:
 	_is_ready = false
 	_db.close()
-	logger.d( "Database closed")
+	if logger: logger.d("Database closed")
 
-# ------------------------------------------------------------------
-#  Read-only query (no write keywords allowed)
-# ------------------------------------------------------------------
 func read_query(cypher: String, params: Dictionary = {}) -> Array:
 	if not _is_ready:
-		logger.e("read_query called before database is ready")
+		if logger: logger.e("read_query called before database is ready")
 		return []
 	
-	# Block write keywords
 	var upper = cypher.to_upper()
 	for keyword in ["CREATE ", "DELETE ", "SET ", "MERGE ", "DROP ", "COPY ", "ALTER "]:
 		if keyword in upper:
-			logger.e("read_query used for a write operation. Use write_query.")
+			if logger: logger.e("read_query used for a write operation. Use write_query.")
 			return []
 
 	if params.is_empty():
 		return _db.query(cypher)
 
-	# Cache prepared statement by cypher hash
 	var key = "read_" + cypher.md5_text()
 	if not key in _prepared_read:
 		var err = _db.prepare(key, cypher)
 		if err != OK:
-			logger.e("Failed to prepare read: " + cypher)
+			if logger: logger.e("Failed to prepare read: " + cypher)
 			return []
 		_prepared_read[key] = cypher
 	return _db.execute_prepared(key, params)
 
-# ------------------------------------------------------------------
-#  Write queue (safe sequential writes)
-# ------------------------------------------------------------------
 func write_query(cypher: String, params: Dictionary = {}, callback: Callable = Callable()) -> void:
 	if not _is_ready and not _initializing:
-		logger.e("write_query called before database is ready")
+		if logger: logger.e("write_query called before database is ready")
 		return
 
-	# ensure it contains a write keyword (soft guard)
 	var upper = cypher.to_upper()
 	var is_write = false
 	for keyword in ["CREATE", "DELETE", "SET", "MERGE", "DROP", "COPY", "ALTER"]:
@@ -128,24 +117,23 @@ func write_query(cypher: String, params: Dictionary = {}, callback: Callable = C
 			is_write = true
 			break
 	if not is_write:
-		logger.d("write_query used with no write keyword: " + cypher)
+		if logger: logger.d("write_query used with no write keyword: " + cypher)
 
 	_write_queue.append({"cypher": cypher, "params": params, "callback": callback})
 	_process_queue()
 
-# Helpers for version storage
-func _get_stored_version() -> int:
-	# Ensure the Meta table exists (idempotent)
-	_db.query("CREATE NODE TABLE IF NOT EXISTS Meta(key STRING PRIMARY KEY, value INT64)");
-	var rows = _db.query("MATCH (m:Meta {key: 'schema_version'}) RETURN m.value")
+func _init_meta_table() -> void:
+	_db.query("CREATE NODE TABLE IF NOT EXISTS Meta(key STRING PRIMARY KEY, value INT64)")
+
+func _get_stored_version(schema_key: String) -> int:
+	var rows = _db.query("MATCH (m:Meta {key: '%s'}) RETURN m.value" % schema_key)
 	if rows.is_empty():
 		return 0
 	return int(rows[0]["m.value"])
 
-func _set_stored_version(version: int) -> void:
-	_db.query("MERGE (m:Meta {key: 'schema_version'}) SET m.value = %d" % version)
+func _set_stored_version(schema_key: String, version: int) -> void:
+	_db.query("MERGE (m:Meta {key: '%s'}) SET m.value = %d" % [schema_key, version])
 
-# Async helper: resolves when queue is empty
 func _wait_for_queue_empty() -> void:
 	while _write_queue.size() > 0 or _is_writing:
 		await get_tree().process_frame
@@ -166,7 +154,7 @@ func _process_queue() -> void:
 
 		if not _db.is_open():
 			error_msg = "Database not open during write"
-			logger.e(error_msg)
+			if logger: logger.e(error_msg)
 		else:
 			if params.is_empty():
 				result = _db.query(cypher)
@@ -174,15 +162,11 @@ func _process_queue() -> void:
 				var stmt_name = "write_" + cypher.md5_text()
 				if _db.prepare(stmt_name, cypher) != OK:
 					error_msg = "Failed to prepare write: " + cypher
-					logger.e(error_msg)
+					if logger: logger.e(error_msg)
 				else:
 					result = _db.execute_prepared(stmt_name, params)
 			
-			# Check if result is an error (Ladybug may return empty array on failure + we already logged internal)
-			# If we detected an "already exists" kind of error, downgrade to WARN
-			# (The C++ layer already printed the error; we just avoid double‑screaming here)
 			if typeof(result) == TYPE_ARRAY and result.is_empty():
-				# Could be a successful non‑returning query (e.g., CREATE). That's fine.
 				pass
 				
 		if _write_queue.size() > 0:
@@ -191,8 +175,33 @@ func _process_queue() -> void:
 		if cb.is_valid():
 			cb.call(result, error_msg)
 
-		# Yield to prevent frame lockup
 		if _write_queue.size() > 0:
 			await get_tree().process_frame
 
 	_is_writing = false
+
+# ------------------------------------------------------------------
+#  Glaze Flattening Hooks
+# ------------------------------------------------------------------
+
+func configure(delimiter: String) -> void:
+	_delimiter = delimiter
+
+func process_and_flatten(node_label: String, id: String, operation: String, incoming_delta_str: String, schema_keys: Array) -> Dictionary:
+	if not _flattener or not _is_ready: 
+		return {}
+
+	var existing_data: String = ""
+	if operation == "UPDATE":
+		var fetch_cypher = "MATCH (n:%s {id: $id}) RETURN n.data LIMIT 1" % node_label.capitalize()
+		var rows = read_query(fetch_cypher, {"id": id})
+		if not rows.is_empty() and rows[0].has("n.data"):
+			var raw_variant = rows[0]["n.data"]
+			if typeof(raw_variant) == TYPE_STRING:
+				existing_data = raw_variant
+
+	return _flattener.process(id, operation, incoming_delta_str, existing_data, schema_keys, _delimiter)
+
+func format_crdt_delta(incoming_delta_str: String) -> String:
+	if not _flattener: return ""
+	return _flattener.format_crdt_delta(incoming_delta_str)

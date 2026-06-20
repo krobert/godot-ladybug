@@ -1,16 +1,16 @@
-#include "register_types.h"   // your header
+#include "register_types.h"  
 #include <gdextension_interface.h>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/defs.hpp>
 #include <godot_cpp/godot.hpp>
-
-#include "glaze.h"      // your class header
-
+#include "flattener.h"  
+#include "glaze.h"     
 using namespace godot;
 
 void initialize_gdextension_types(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) return;
     GDREGISTER_CLASS(Glaze);
+    GDREGISTER_CLASS(Flattener);
 }
 
 void uninitialize_gdextension_types(ModuleInitializationLevel p_level) {

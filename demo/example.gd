@@ -9,7 +9,7 @@ func _ready() -> void:
 	Mcp.logger = Log
 	
 	LadybugBridge.database_ready.connect(_on_db_ready)
-	await LadybugBridge.init_db(schema, "people.lbdb")
+	await LadybugBridge.init_db([schema], "db/people.lbdb")
 	
 	_register_tools()
 

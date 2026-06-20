@@ -72,14 +72,79 @@ static Variant value_to_variant(lbug_value* val) {
         case LBUG_STRING: {
             char* s = nullptr;
             lbug_value_get_string(val, &s);
-            String ret = s;
-            lbug_destroy_string(s);
+            String ret;
+            if (s) {
+                ret = String::utf8(s);
+                if (ret.is_empty() && s[0] != '\0') {
+                    ret = String(s); 
+                }
+                lbug_destroy_string(s);
+            }
             return ret;
+        }
+        case LBUG_NODE: {
+            Dictionary dict;
+            uint64_t prop_count = 0;
+            if (lbug_node_val_get_property_size(val, &prop_count) == LbugSuccess) {
+                for (uint64_t i = 0; i < prop_count; i++) {
+                    char* prop_name = nullptr;
+                    if (lbug_node_val_get_property_name_at(val, i, &prop_name) == LbugSuccess) {
+                        lbug_value prop_val;
+                        if (lbug_node_val_get_property_value_at(val, i, &prop_val) == LbugSuccess) {
+                            // Recursively parse the property (handles nested lists/strings correctly)
+                            dict[String::utf8(prop_name)] = value_to_variant(&prop_val);
+                            lbug_value_destroy(&prop_val);
+                        }
+                        lbug_destroy_string(prop_name);
+                    }
+                }
+            }
+            return dict;
+        }
+        case LBUG_REL: {
+            Dictionary dict;
+            uint64_t prop_count = 0;
+            if (lbug_rel_val_get_property_size(val, &prop_count) == LbugSuccess) {
+                for (uint64_t i = 0; i < prop_count; i++) {
+                    char* prop_name = nullptr;
+                    if (lbug_rel_val_get_property_name_at(val, i, &prop_name) == LbugSuccess) {
+                        lbug_value prop_val;
+                        if (lbug_rel_val_get_property_value_at(val, i, &prop_val) == LbugSuccess) {
+                            dict[String::utf8(prop_name)] = value_to_variant(&prop_val);
+                            lbug_value_destroy(&prop_val);
+                        }
+                        lbug_destroy_string(prop_name);
+                    }
+                }
+            }
+            return dict;
+        }
+        case LBUG_LIST:
+        case LBUG_ARRAY: {
+            Array arr;
+            uint64_t size = 0;
+            if (lbug_value_get_list_size(val, &size) == LbugSuccess) {
+                for (uint64_t i = 0; i < size; i++) {
+                    lbug_value elem_val;
+                    if (lbug_value_get_list_element(val, i, &elem_val) == LbugSuccess) {
+                        // Recursively parse the element
+                        arr.append(value_to_variant(&elem_val));
+                        lbug_value_destroy(&elem_val);
+                    }
+                }
+            }
+            return arr;
         }
         default: {
             char* s = lbug_value_to_string(val);
-            String ret = s;
-            lbug_destroy_string(s);
+            String ret;
+            if (s) {
+                ret = String::utf8(s);
+                if (ret.is_empty() && s[0] != '\0') {
+                    ret = String(s);
+                }
+                lbug_destroy_string(s);
+            }
             return ret;
         }
     }
@@ -113,7 +178,7 @@ Array Ladybug::query(const String &cypher) {
     for (uint64_t i = 0; i < num_cols; i++) {
         char* name = nullptr;
         lbug_query_result_get_column_name(&qr, i, &name);
-        col_names.push_back(name);
+        col_names.push_back(String::utf8(name));
         lbug_destroy_string(name);
     }
 
