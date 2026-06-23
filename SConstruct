@@ -11,7 +11,14 @@ customs = [os.path.abspath(path) for path in ["custom.py"]]
 # Define custom build variables
 opts = Variables(customs, ARGUMENTS)
 opts.Add(BoolVariable("build_ladybug", "Build the Ladybug Database module", True))
-opts.Add(BoolVariable("build_mcp", "Build the MCP Server module", True))
+opts.Add(
+    EnumVariable(
+        "build_mcp",
+        "Build the MCP module backend",
+        "rapid",
+        allowed_values=("no", "glaze", "rapid"),
+    )
+)
 opts.Update(localEnv)
 
 Help(opts.GenerateHelpText(localEnv))
@@ -87,25 +94,49 @@ if env["build_ladybug"]:
         )
 
 # --- MCP MODULE ---
-if env["build_mcp"]:
+if env["build_mcp"] != "no":
     mcp_env = env.Clone()
-    mcp_env.Append(CPPPATH=["thirdparty/glaze/include", "src/glaze/"])
-    if (
-        mcp_env.get("is_msvc", False)
-        or mcp_env.get("cc", "") == "msvc"
-        or mcp_env.get("CC", "") == "cl"
-    ):
-        mcp_env.Append(CXXFLAGS=["/std:c++latest"])
-    else:
-        mcp_env.Append(CXXFLAGS=["-std=c++2b"])
 
-    mcp_src = Glob("src/glaze/*.cpp")
+    # ---------------------------------------------------------
+    # RAPIDJSON BACKEND
+    # ---------------------------------------------------------
+    if env["build_mcp"] == "rapid":
+        mcp_env.Append(CPPPATH=["thirdparty/rapidjson/include", "src/rapidjson/"])
+        mcp_src = Glob("src/rapidjson/*.cpp")
+
+        doc_gen_target = "src/rapidjson/gen/doc_data.gen.cpp"
+        doc_xml_source = Glob("doc_classes/rapidjson/*.xml")
+
+    # ---------------------------------------------------------
+    # GLAZE BACKEND (Legacy)
+    # ---------------------------------------------------------
+    elif env["build_mcp"] == "glaze":
+        mcp_env.Append(CPPPATH=["thirdparty/glaze/include", "src/glaze/"])
+
+        # Glaze requires modern C++ features
+        if (
+            mcp_env.get("is_msvc", False)
+            or mcp_env.get("cc", "") == "msvc"
+            or mcp_env.get("CC", "") == "cl"
+        ):
+            mcp_env.Append(CXXFLAGS=["/std:c++latest"])
+        else:
+            mcp_env.Append(CXXFLAGS=["-std=c++2b"])
+
+        mcp_src = Glob("src/glaze/*.cpp")
+
+        doc_gen_target = "src/glaze/gen/doc_data.gen.cpp"
+        doc_xml_source = Glob("doc_classes/glaze/*.xml")
+
+    # ---------------------------------------------------------
+    # COMMON BUILD STEPS
+    # ---------------------------------------------------------
     if mcp_env["target"] in ["editor", "template_debug"]:
         try:
             mcp_src.append(
                 mcp_env.GodotCPPDocData(
-                    "src/glaze/gen/doc_data.gen.cpp",
-                    source=Glob("doc_classes/glaze/*.xml"),
+                    doc_gen_target,
+                    source=doc_xml_source,
                 )
             )
         except AttributeError:

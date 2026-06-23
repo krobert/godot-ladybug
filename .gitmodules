@@ -5,3 +5,6 @@
 [submodule "thirdparty/glaze"]
 	path = thirdparty/glaze
 	url = https://github.com/stephenberry/glaze.git
+[submodule "thirdparty/rapidjson"]
+	path = thirdparty/rapidjson
+	url = https://github.com/Tencent/rapidjson.git

@@ -1,5 +1,5 @@
 [configuration]
-entry_symbol = "glaze_library_init"
+entry_symbol = "rapidjson_library_init"
 compatibility_minimum = "4.6"
 
 [libraries]
