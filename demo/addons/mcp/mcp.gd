@@ -13,7 +13,7 @@ const REQUEST_TIMEOUT_MSEC: int = 10000
 var _server: TCPServer = TCPServer.new()
 var _pending_clients: Array[Dictionary] = []
 var _sse_streams: Dictionary = {}
-var _glaze: Glaze
+var _json: RapidJSON
 
 var _tools: Dictionary = {}
 var _resources: Dictionary = {}
@@ -22,7 +22,7 @@ var _active_session_count: int = 0
 var _last_keepalive_msec: int = 0
 
 func _ready() -> void:
-	_glaze = Glaze.new()
+	_json = RapidJSON.new()
 
 func start() -> Error:
 	if _server.is_listening():
@@ -185,7 +185,7 @@ func _process_mcp_rpc(sse_client: StreamPeerTCP, json_str: String) -> void:
 	if logger:
 		logger.d("Incoming RPC: ", json_str)
 		
-	var req: Variant = _glaze.from_string(json_str)
+	var req: Variant = _json.from_string(json_str)
 	if typeof(req) != TYPE_DICTIONARY or not req.has("method"):
 		if logger:
 			logger.e("Parse error on incoming RPC")
@@ -232,7 +232,7 @@ func _process_mcp_rpc(sse_client: StreamPeerTCP, json_str: String) -> void:
 			var is_err: bool = typeof(exec_result) == TYPE_DICTIONARY and exec_result.has("error")
 			
 			var response_data: Dictionary = {
-				"content": [{"type": "text", "text": exec_result if typeof(exec_result) == TYPE_STRING else _glaze.to_string(exec_result)}],
+				"content": [{"type": "text", "text": exec_result if typeof(exec_result) == TYPE_STRING else _json.to_string(exec_result)}],
 				"isError": is_err
 			}
 			
@@ -251,7 +251,7 @@ func _process_mcp_rpc(sse_client: StreamPeerTCP, json_str: String) -> void:
 			var uri: String = params.get("uri", "")
 			if _resources.has(uri):
 				var content: Variant = await _resources[uri].callback.call(uri)
-				_send_response(sse_client, msg_id, {"contents": [{"uri": uri, "mimeType": _resources[uri].mimeType, "text": content if typeof(content) == TYPE_STRING else _glaze.to_string(content)}]})
+				_send_response(sse_client, msg_id, {"contents": [{"uri": uri, "mimeType": _resources[uri].mimeType, "text": content if typeof(content) == TYPE_STRING else _json.to_string(content)}]})
 			else:
 				if logger:
 					logger.e("Invalid resource URI: ", uri)
@@ -265,7 +265,7 @@ func _process_mcp_rpc(sse_client: StreamPeerTCP, json_str: String) -> void:
 
 func _send_response(client: StreamPeerTCP, id: Variant, result: Dictionary) -> void:
 	if id == null: return
-	var payload: String = _glaze.to_string({"jsonrpc": "2.0", "id": id, "result": result}).replace("\n", "").replace("\r", "")
+	var payload: String = _json.to_string({"jsonrpc": "2.0", "id": id, "result": result}).replace("\n", "").replace("\r", "")
 	
 	if logger:
 		logger.d("Sending SSE: ", payload)
@@ -274,7 +274,7 @@ func _send_response(client: StreamPeerTCP, id: Variant, result: Dictionary) -> v
 
 func _send_error(client: StreamPeerTCP, id: Variant, code: int, message: String) -> void:
 	if id == null: return
-	var payload: String = _glaze.to_string({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}).replace("\n", "").replace("\r", "")
+	var payload: String = _json.to_string({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}).replace("\n", "").replace("\r", "")
 	
 	if logger:
 		logger.e("Sending Error SSE: ", payload)

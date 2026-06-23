@@ -56,6 +56,7 @@ func init_db(schemas: Array[LadybugSchema], user_path: String) -> void:
 	_is_ready = true
 	_initializing = false
 	if logger: logger.d("Database ready")
+	database_ready.emit()
 	
 
 func is_ready() -> bool:

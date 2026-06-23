@@ -7,15 +7,13 @@ signal write_finished(err: String)
 func _ready() -> void:
 	LadybugBridge.logger = Log # in my example global autoloadss
 	Mcp.logger = Log
-	
 	LadybugBridge.database_ready.connect(_on_db_ready)
-	await LadybugBridge.init_db([schema], "db/people.lbdb")
+	LadybugBridge.init_db([schema], "db/people.lbdb")
 	
 	_register_tools()
 
 func _on_db_ready() -> void:
 	Mcp.start()
-	print("db_ready")
 	# test db
 	var result = LadybugBridge.read_query("MATCH (p:Person) RETURN p.name, p.age")
 	for row in result:
