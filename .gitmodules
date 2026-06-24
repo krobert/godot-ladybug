@@ -2,6 +2,3 @@
 	path = godot-cpp
 	url = https://github.com/godotengine/godot-cpp.git
 	branch = master
-[submodule "thirdparty/glaze"]
-	path = thirdparty/glaze
-	url = https://github.com/stephenberry/glaze.git
