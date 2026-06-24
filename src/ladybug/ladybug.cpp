@@ -102,7 +102,6 @@ static Variant value_to_variant(lbug_value* val) {
                     if (lbug_node_val_get_property_name_at(val, i, &prop_name) == LbugSuccess) {
                         lbug_value prop_val;
                         if (lbug_node_val_get_property_value_at(val, i, &prop_val) == LbugSuccess) {
-                            // Recursively parse the property (handles nested lists/strings correctly)
                             dict[String::utf8(prop_name)] = value_to_variant(&prop_val);
                             lbug_value_destroy(&prop_val);
                         }
@@ -138,7 +137,6 @@ static Variant value_to_variant(lbug_value* val) {
                 for (uint64_t i = 0; i < size; i++) {
                     lbug_value elem_val;
                     if (lbug_value_get_list_element(val, i, &elem_val) == LbugSuccess) {
-                        // Recursively parse the element
                         arr.append(value_to_variant(&elem_val));
                         lbug_value_destroy(&elem_val);
                     }
@@ -161,25 +159,29 @@ static Variant value_to_variant(lbug_value* val) {
     }
 }
 
-// ---------- query ----------
-Array Ladybug::query(const String &cypher) {
-    Array out;
-    ERR_FAIL_COND_V(!is_open(), out);
-
-    lbug_query_result qr;
-    if (lbug_connection_query(&_conn, cypher.utf8().get_data(), &qr) != LbugSuccess) {
-        _log_error();
-        return out;
-    }
+// ---------- shared result parser ----------
+static Dictionary process_query_result(lbug_query_result& qr) {
+    Dictionary out;
+    Array rows;
 
     if (!lbug_query_result_is_success(&qr)) {
         char* msg = lbug_query_result_get_error_message(&qr);
+        out["status"] = ERR_QUERY_FAILED;
         if (msg) {
+            out["error"] = String::utf8(msg);
             UtilityFunctions::printerr("Query error: ", msg);
             lbug_destroy_string(msg);
         } else {
-            _log_error();
+            char* err = lbug_get_last_error();
+            if (err) {
+                out["error"] = String::utf8(err);
+                UtilityFunctions::printerr("Ladybug error: ", err);
+                lbug_destroy_string(err);
+            } else {
+                out["error"] = "Unknown query execution failure";
+            }
         }
+        out["data"] = rows;
         lbug_query_result_destroy(&qr);
         return out;
     }
@@ -204,10 +206,44 @@ Array Ladybug::query(const String &cypher) {
                 lbug_value_destroy(&val);
             }
         }
-        out.append(dict);
+        rows.append(dict);
     }
     lbug_query_result_destroy(&qr);
+    
+    out["status"] = OK;
+    out["error"] = "";
+    out["data"] = rows;
     return out;
+}
+
+// ---------- query ----------
+Dictionary Ladybug::query(const String &cypher) {
+    Dictionary out;
+    Array rows;
+
+    if (!is_open()) {
+        out["status"] = ERR_UNCONFIGURED;
+        out["error"] = "Database is not open";
+        out["data"] = rows;
+        return out;
+    }
+
+    lbug_query_result qr;
+    if (lbug_connection_query(&_conn, cypher.utf8().get_data(), &qr) != LbugSuccess) {
+        out["status"] = ERR_DATABASE_CANT_READ;
+        char* err = lbug_get_last_error();
+        if (err) {
+            out["error"] = String::utf8(err);
+            UtilityFunctions::printerr("Ladybug error: ", err);
+            lbug_destroy_string(err);
+        } else {
+            out["error"] = "Connection query failed";
+        }
+        out["data"] = rows;
+        return out;
+    }
+
+    return process_query_result(qr);
 }
 
 // ---------- prepared statements ----------
@@ -247,7 +283,6 @@ Error Ladybug::prepare(const String &name, const String &cypher) {
         return FAILED;
     }
     std::string key = name.utf8().get_data();
-    // if a statement with this name already exists, destroy it
     if (_stmts.find(key) != _stmts.end()) {
         lbug_prepared_statement_destroy(&_stmts[key]);
     }
@@ -255,19 +290,29 @@ Error Ladybug::prepare(const String &name, const String &cypher) {
     return OK;
 }
 
-Array Ladybug::execute_prepared(const String &name, const Dictionary &params) {
-    Array out;
+Dictionary Ladybug::execute_prepared(const String &name, const Dictionary &params) {
+    Dictionary out;
+    Array rows;
     std::string key = name.utf8().get_data();
     auto it = _stmts.find(key);
-    ERR_FAIL_COND_V(it == _stmts.end(), out);
+    
+    if (it == _stmts.end()) {
+        out["status"] = FAILED;
+        out["error"] = "Prepared statement not found: " + name;
+        out["data"] = rows;
+        return out;
+    }
+    
     lbug_prepared_statement* stmt = &it->second;
 
-    // Bind parameters
     Array keys = params.keys();
     for (int i = 0; i < keys.size(); i++) {
         String k = keys[i];
         std::string pname = k.utf8().get_data();
         if (bind_param(stmt, pname.c_str(), params[k]) != LbugSuccess) {
+            out["status"] = FAILED;
+            out["error"] = "Failed to bind parameter: " + k;
+            out["data"] = rows;
             UtilityFunctions::printerr("Failed to bind parameter: ", k);
             return out;
         }
@@ -275,46 +320,23 @@ Array Ladybug::execute_prepared(const String &name, const Dictionary &params) {
 
     lbug_query_result qr;
     if (lbug_connection_execute(&_conn, stmt, &qr) != LbugSuccess) {
-        _log_error();
-        return out;
-    }
-
-    if (!lbug_query_result_is_success(&qr)) {
+        out["status"] = ERR_DATABASE_CANT_READ;
+        
         char* msg = lbug_query_result_get_error_message(&qr);
-        if (msg) {
-            UtilityFunctions::printerr("Execute error: ", msg);
+        if (msg && strlen(msg) > 0) {
+            out["error"] = String::utf8(msg);
+            UtilityFunctions::printerr("Ladybug execution error: ", msg);
             lbug_destroy_string(msg);
         } else {
-            _log_error();
+            out["error"] = "Execute connection failed (Unknown Engine Error)";
         }
-        lbug_query_result_destroy(&qr);
+        
+        out["data"] = rows;
+        lbug_query_result_destroy(&qr); // You MUST destroy it to prevent memory leaks
         return out;
     }
 
-    uint64_t num_cols = lbug_query_result_get_num_columns(&qr);
-    std::vector<String> col_names;
-    for (uint64_t i = 0; i < num_cols; i++) {
-        char* name = nullptr;
-        lbug_query_result_get_column_name(&qr, i, &name);
-        col_names.push_back(name);
-        lbug_destroy_string(name);
-    }
-
-    while (lbug_query_result_has_next(&qr)) {
-        lbug_flat_tuple row;
-        if (lbug_query_result_get_next(&qr, &row) != LbugSuccess) continue;
-        Dictionary dict;
-        for (uint64_t i = 0; i < num_cols; i++) {
-            lbug_value val;
-            if (lbug_flat_tuple_get_value(&row, i, &val) == LbugSuccess) {
-                dict[col_names[i]] = value_to_variant(&val);
-                lbug_value_destroy(&val);
-            }
-        }
-        out.append(dict);
-    }
-    lbug_query_result_destroy(&qr);
-    return out;
+    return process_query_result(qr);
 }
 
 void Ladybug::close() {

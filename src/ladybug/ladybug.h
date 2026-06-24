@@ -30,9 +30,9 @@ public:
 
     Error open(const String &path);
     bool is_open() const;
-    Array query(const String &cypher);
+    Dictionary query(const String &cypher);
     Error prepare(const String &name, const String &cypher);
-    Array execute_prepared(const String &name, const Dictionary &params);
+    Dictionary execute_prepared(const String &name, const Dictionary &params);
     String last_error() const;
     void close();
 

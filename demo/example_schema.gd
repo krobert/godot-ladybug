@@ -4,7 +4,7 @@ extends LadybugSchema
 func _init() -> void:
 	version = 1
 	setup_queries = [
-		"CREATE NODE TABLE Person(name STRING PRIMARY KEY, age INT64)",
-		"CREATE (:Person {name: 'Alice', age: 30})",
-		"CREATE (:Person {name: 'Bob', age: 25})"
+		"CREATE NODE TABLE IF NOT EXISTS Person(name STRING PRIMARY KEY, age INT64)",
+		"MERGE (:Person {name: 'Alice'}) ON CREATE SET Person.age = 30",
+		"MERGE (:Person {name: 'Bob'}) ON CREATE SET Person.age = 25"
 	]

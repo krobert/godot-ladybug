@@ -5,7 +5,6 @@ extends Node
 signal write_finished(err: String)
 
 func _ready() -> void:
-	LadybugBridge.logger = Log # in my example global autoloadss
 	Mcp.logger = Log
 	LadybugBridge.database_ready.connect(_on_db_ready)
 	LadybugBridge.init_db([schema], "db/people.lbdb")
@@ -19,8 +18,8 @@ func _on_db_ready() -> void:
 	for row in result:
 		print("Name: ", row["p.name"], " Age: ", row["p.age"])
 
-	LadybugBridge.write_query("CREATE (:Person {name: $n})", {"n": "Charlie"}, func(res, err):
-		if err != "":
+	LadybugBridge.write_query("MERGE (:Person {name: $n})", {"n": "Charlie"}, func(status, res, err):
+		if status != OK:
 			print("Write failed: ", err)
 		else:
 			print("Write succeeded")
