@@ -33,7 +33,9 @@ public:
     Array query(const String &cypher);
     Error prepare(const String &name, const String &cypher);
     Array execute_prepared(const String &name, const Dictionary &params);
+    String last_error() const;
     void close();
+
 };
 
 }

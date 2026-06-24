@@ -12,6 +12,7 @@ void Ladybug::_bind_methods() {
     ClassDB::bind_method(D_METHOD("query", "cypher"), &Ladybug::query);
     ClassDB::bind_method(D_METHOD("prepare", "name", "cypher"), &Ladybug::prepare);
     ClassDB::bind_method(D_METHOD("execute_prepared", "name", "params"), &Ladybug::execute_prepared);
+    ClassDB::bind_method(D_METHOD("last_error"), &Ladybug::last_error);
     ClassDB::bind_method(D_METHOD("close"), &Ladybug::close);
 }
 
@@ -22,6 +23,16 @@ Ladybug::Ladybug() {
 
 Ladybug::~Ladybug() {
     close();
+}
+
+String Ladybug::last_error() const {
+    char* err = lbug_get_last_error();
+    if (err) {
+        String ret = String::utf8(err);
+        lbug_destroy_string(err);
+        return ret;
+    }
+    return "";
 }
 
 void Ladybug::_log_error() {
