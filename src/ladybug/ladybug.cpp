@@ -257,6 +257,40 @@ static lbug_state bind_param(lbug_prepared_statement* stmt, const char* name, co
             std::string s = String(value).utf8().get_data();
             return lbug_prepared_statement_bind_string(stmt, name, s.c_str());
         }
+       case Variant::ARRAY: {
+            Array arr = value;
+            uint64_t num_elements = arr.size();
+            
+            // 1. Create a buffer of pointers
+            std::vector<lbug_value*> elements(num_elements);
+            
+            // 2. Create the individual elements using the single-arg constructor
+            for (uint64_t i = 0; i < num_elements; i++) {
+                std::string s = String(arr[i]).utf8().get_data();
+                elements[i] = lbug_value_create_string(s.c_str());
+            }
+            
+            // 3. Create the list
+            // Pass the address of the pointer for the 3rd argument
+            lbug_value* list_ptr = nullptr;
+            lbug_state res = lbug_value_create_list(num_elements, elements.data(), &list_ptr);
+            
+            // 4. Bind and Cleanup
+            if (res == LbugSuccess && list_ptr != nullptr) {
+                // Assuming your prepared statement takes a pointer to a value
+                res = lbug_prepared_statement_bind_value(stmt, name, list_ptr);
+                
+                // Destroy the list
+                lbug_value_destroy(list_ptr);
+            }
+            
+            // Clean up the elements we created
+            for (auto* el : elements) {
+                if (el) lbug_value_destroy(el);
+            }
+            
+            return res;
+        }
         default: {
             std::string s = String(value).utf8().get_data();
             return lbug_prepared_statement_bind_string(stmt, name, s.c_str());

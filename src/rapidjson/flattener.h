@@ -23,6 +23,8 @@ private:
     rapidjson::Value expand_dot_notation(const rapidjson::Value& source, rapidjson::Document::AllocatorType& allocator);
     void flatten_object(const rapidjson::Value& obj, const String& prefix, const String& delimiter, const Array& schema_keys, Dictionary& safe_flattened);
     rapidjson::Value format_crdt(const rapidjson::Value& obj, rapidjson::Document::AllocatorType& allocator);
+	String _sanitize_key(const String& key) const;
+	void _flatten_recursive(const Dictionary& data, const String& prefix, const Array& schema_keys, Dictionary& result) const;
 
 protected:
     static void _bind_methods();
@@ -33,6 +35,8 @@ public:
 
     Dictionary process(const String& id, const String& operation, const String& incoming_delta_str, const String& existing_db_json, const Array& schema_keys, const String& delimiter);
     String format_crdt_delta(const String& delta_string);
+	Dictionary flatten_for_db(const String& id, const Dictionary& data, const Array& schema_keys) const;
+	
 };
 
 #endif // JSON_FLATTENER_H

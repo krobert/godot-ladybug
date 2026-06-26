@@ -23,8 +23,11 @@ For best performance make your graph models in cpp struct and compile your own v
 
 1. Clone the repository with submodules:
     ```bash
-    git clone --recurse-submodules [https://github.com/krobert/godot-ladybug.git](https://github.com/krobert/godot-ladybug.git)
-    cd YOUR_REPO
+    git clone --no-recurse-submodules https://github.com/krobert/godot-ladybug.git
+    cd godot-ladybug
+
+    git submodule sync --recursive
+    git submodule update --init --recursive
     ```
 
 2. Compile the C++ bindings and the extension for your platform:

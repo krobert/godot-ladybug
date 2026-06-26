@@ -1,4 +1,5 @@
 #include "flattener.h"
+#include <godot_cpp/classes/json.hpp>
 #include <rapidjson/writer.h>
 #include <rapidjson/stringbuffer.h>
 #include <vector>
@@ -7,6 +8,7 @@
 void Flattener::_bind_methods() {
     ClassDB::bind_method(D_METHOD("process", "id", "operation", "incoming_delta_string", "existing_db_json", "schema_keys", "delimiter"), &Flattener::process);
     ClassDB::bind_method(D_METHOD("format_crdt_delta", "delta_string"), &Flattener::format_crdt_delta);
+	ClassDB::bind_method(D_METHOD("flatten_for_db", "id", "data", "schema_keys"), &Flattener::flatten_for_db);
 }
 
 Flattener::Flattener() {
@@ -189,10 +191,11 @@ Dictionary Flattener::process(const String& id, const String& operation, const S
     Dictionary result;
     rapidjson::Document incoming_doc;
     
-    if (incoming_doc.Parse(incoming_delta_str.utf8().get_data()).HasParseError()) {
-        UtilityFunctions::push_error("RapidJSON parse error on incoming packet.");
-        return result;
-    }
+    CharString in_cs = incoming_delta_str.utf8();
+	if (incoming_doc.Parse(in_cs.get_data()).HasParseError()) {
+		UtilityFunctions::push_error("RapidJSON parse error on incoming packet.");
+		return result;
+	}
 
     rapidjson::Document::AllocatorType& allocator = incoming_doc.GetAllocator();
     rapidjson::Value expanded_delta = expand_dot_notation(incoming_doc, allocator);
@@ -200,8 +203,9 @@ Dictionary Flattener::process(const String& id, const String& operation, const S
     rapidjson::Value final_body;
     rapidjson::Document existing_doc;
     
-    if (operation == "UPDATE" && !existing_db_json.is_empty()) {
-        if (!existing_doc.Parse(existing_db_json.utf8().get_data()).HasParseError()) {
+    CharString ex_cs = existing_db_json.utf8();
+	if (operation == "UPDATE" && !existing_db_json.is_empty()) {
+		if (!existing_doc.Parse(ex_cs.get_data()).HasParseError()) {
             smart_merge(existing_doc, expanded_delta, existing_doc.GetAllocator());
             final_body.CopyFrom(existing_doc, allocator);
         } else {
@@ -284,7 +288,8 @@ rapidjson::Value Flattener::format_crdt(const rapidjson::Value& obj, rapidjson::
 
 String Flattener::format_crdt_delta(const String& delta_string) {
     rapidjson::Document doc;
-    if (doc.Parse(delta_string.utf8().get_data()).HasParseError()) return "";
+    CharString delta_cs = delta_string.utf8();
+	if (doc.Parse(delta_cs.get_data()).HasParseError()) return "";
     
     rapidjson::Document::AllocatorType& allocator = doc.GetAllocator();
     rapidjson::Value expanded = expand_dot_notation(doc, allocator);
@@ -294,4 +299,55 @@ String Flattener::format_crdt_delta(const String& delta_string) {
     rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
     formatted.Accept(writer);
     return String::utf8(sb.GetString());
+}
+
+String Flattener::_sanitize_key(const String& key) const {
+	CharString cs = key.utf8();
+	for (int i = 0; i < cs.length(); i++) {
+		char c = cs[i];
+		if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) {
+			cs[i] = '_';
+		}
+	}
+	return String::utf8(cs.get_data());
+}
+
+void Flattener::_flatten_recursive(const Dictionary& data, const String& prefix, const Array& schema_keys, Dictionary& result) const {
+	Array keys = data.keys();
+	for (int i = 0; i < keys.size(); i++) {
+		String key = keys[i];
+		
+		if (key == "_" || key == "@type" || key == "id") {
+			continue;
+		}
+
+		String safe_key = _sanitize_key(key);
+		String new_key = prefix.is_empty() ? safe_key : prefix + String("_") + safe_key;
+		Variant value = data[key];
+
+		if (value.get_type() == Variant::DICTIONARY) {
+			if (schema_keys.has(new_key)) {
+				result[new_key] = JSON::stringify(value);
+			} else {
+				_flatten_recursive(value, new_key, schema_keys, result);
+			}
+		} else if (schema_keys.has(new_key)) {
+			if (value.get_type() == Variant::ARRAY) {
+				result[new_key] = JSON::stringify(value);
+			} else {
+				result[new_key] = value;
+			}
+		}
+	}
+}
+
+Dictionary Flattener::flatten_for_db(const String& id, const Dictionary& data, const Array& schema_keys) const {
+	Dictionary result;
+	result["id"] = id;
+
+	_flatten_recursive(data, "", schema_keys, result);
+
+	result["data"] = JSON::stringify(data);
+	
+	return result;
 }
